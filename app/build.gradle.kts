@@ -50,8 +50,8 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        // 默认包名；可通过 -PapplicationId=xxx 覆盖，用于 fork 版与原版共存安装
-        applicationId = (project.findProperty("applicationId") as? String) ?: "com.mytvb"
+        // v7a build uses a separate package so it can coexist with the official app.
+        applicationId = "com.mytvb.v7a"
         minSdk = 23
         targetSdk = 35
         versionCode = 87
@@ -63,7 +63,7 @@ android {
     buildTypes {
         debug {
             ndk {
-                abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+                abiFilters += listOf("armeabi-v7a")
             }
         }
 
@@ -75,7 +75,7 @@ android {
                 "proguard-rules.pro"
             )
             ndk {
-                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+                abiFilters += listOf("armeabi-v7a")
             }
         }
     }
@@ -199,7 +199,7 @@ androidComponents {
         val renameTask = tasks.register("rename${capitalizedVariantName}Apk", RenameApkTask::class) {
             apkDirectory.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.APK))
             renamedApkDirectory.set(layout.buildDirectory.dir("outputs/renamed_apk/${variant.name}"))
-            appName.set("MyBili")
+            appName.set("MyTVB-v7a")
             buildType.set(variant.buildType)
             versionName.set(variant.outputs.single().versionName)
         }
