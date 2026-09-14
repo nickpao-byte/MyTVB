@@ -1,11 +1,6 @@
-name: Build MyTVB v7a APK
+name: Build MyTVB v7a Release APK
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/build-apk.yml
   workflow_dispatch:
 
 jobs:
@@ -26,22 +21,64 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Build 32-bit debug APK
+      - name: Validate signing secrets
+        env:
+          KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_FILE" || { echo "Missing KEYSTORE_FILE"; exit 1; }
+          test -n "$KEYSTORE_PASSWORD" || { echo "Missing KEYSTORE_PASSWORD"; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "Missing KEY_ALIAS"; exit 1; }
+          test -n "$KEY_PASSWORD" || { echo "Missing KEY_PASSWORD"; exit 1; }
+
+      - name: Restore fixed signing key
+        env:
+          KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
+        run: |
+          printf '%s' "$KEYSTORE_FILE" | base64 -d > "$GITHUB_WORKSPACE/MyTVB-v7a-release.jks"
+          chmod 600 "$GITHUB_WORKSPACE/MyTVB-v7a-release.jks"
+
+      - name: Build optimized 32-bit release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebugRenamed
+          ./gradlew assembleReleaseRenamed \
+            -Pandroid.injected.signing.store.file="$GITHUB_WORKSPACE/MyTVB-v7a-release.jks" \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
 
-      - name: Verify APK
+      - name: Verify package, ABI and signing certificate
         run: |
-          APK="app/build/outputs/renamed_apk/debug/MyTVB-v7a-v2.0.3-debug.apk"
+          APK="app/build/outputs/renamed_apk/release/MyTVB-v7a-v2.0.3-release.apk"
           echo "APK: $APK"
           ls -lh "$APK"
-          echo "Native ABI directories:"
-          unzip -l "$APK" | awk '/lib\/.+\.so$/ {split($4,a,"/"); print a[2]}' | sort -u
 
-      - name: Upload APK
+          echo "Native ABI directories:"
+          ABIS=$(unzip -l "$APK" | awk '/lib\/.+\.so$/ {split($4,a,"/"); print a[2]}' | sort -u)
+          printf '%s\n' "$ABIS"
+          test "$ABIS" = "armeabi-v7a" || { echo "Unexpected ABI set"; exit 1; }
+
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
+          echo "Package info:"
+          "$AAPT" dump badging "$APK" | grep '^package:' | head -n 1
+          "$AAPT" dump badging "$APK" | grep "name='com.mytvb.v7a'" >/dev/null || { echo "Unexpected package name"; exit 1; }
+
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          echo "Signing certificate:"
+          "$APKSIGNER" verify --print-certs "$APK"
+          CERT_SHA256=$($APKSIGNER verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr '[:lower:]' '[:upper:]')
+          EXPECTED="6205766554CAEA4A170972CAE47BD53F79252AD76A0A7F8280473CAC0348C746"
+          test "$CERT_SHA256" = "$EXPECTED" || { echo "Unexpected signing certificate"; exit 1; }
+
+      - name: Upload release APK
         uses: actions/upload-artifact@v6
         with:
-          name: MyTVB-v2.0.3-v7a-32bit
-          path: app/build/outputs/renamed_apk/debug/MyTVB-v7a-v2.0.3-debug.apk
+          name: MyTVB-v2.0.3-v7a-release-32bit
+          path: app/build/outputs/renamed_apk/release/MyTVB-v7a-v2.0.3-release.apk
           if-no-files-found: error
