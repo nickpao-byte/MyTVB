@@ -1,9 +1,9 @@
-name: Build MyTVB v2.0.3 v7a Release - TV PlayInfo Fallback
+name: Build MyTVB v2.0.3 v7a Release - App PlayInfo Fallback
 
 on:
   push:
     branches:
-      - build-v7a-tv-playinfo-fallback
+      - build-v7a-app-playinfo-fallback
     paths:
       - app/src/main/java/com/mytvb/network/WbiGenerator.kt
       - app/src/main/java/com/mytvb/network/ua/DesktopUserAgentStore.kt
@@ -22,7 +22,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout v7a TV PlayInfo fallback branch
+      - name: Checkout v7a app PlayInfo fallback branch
         uses: actions/checkout@v5
 
       - name: Apply Kotlin playback patches
@@ -48,14 +48,18 @@ jobs:
           printf '%s\n' "$ACTUAL"
           test "$ACTUAL" = "$EXPECTED"
 
-      - name: Verify TV PlayInfo and 412 fallbacks are present
+      - name: Verify direct TV and Android App PlayInfo paths are present
         run: |
           grep -F 'val currentDmParams = if (includeDmParams) buildDmParams() else emptyMap()' app/src/main/java/com/mytvb/network/WbiGenerator.kt
           grep -F 'Chrome 153 is stable in Sep 2026' app/src/main/java/com/mytvb/network/ua/DesktopUserAgentStore.kt
-          grep -F 'switching to native minimal request profile' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
+          grep -F 'directOnly=true' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
           grep -F 'api.snm0516.aisee.tv/x/tv/playurl' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
-          grep -F 'playinfo winner=tv_api' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
-          grep -F 'Bilibili Freedoooooom/MarkII' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
+          grep -F 'app.bilibili.com/x/v2/playurl' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
+          grep -F 'playinfo winner=android_app_api' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
+          grep -F 'BiliDroid/7.66.0' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
+          grep -F 'TV-API HTTP' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
+          grep -F 'APP-API HTTP' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
+          ! grep -F 'Bilibili Freedoooooom/MarkII' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
           grep -F 'media_http412 retry=native' app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt
           grep -F 'MEDIA-CDN HTTP 412' app/src/main/java/com/mytvb/feature/player/PlaybackFallbackController.kt
           ! grep -F 'Chrome/119.0.0.0' app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt
@@ -102,7 +106,7 @@ jobs:
       - name: Upload Release APK
         uses: actions/upload-artifact@v6
         with:
-          name: MyTVB-v2.0.3-v7a-release-tv-playinfo-fallback
+          name: MyTVB-v2.0.3-v7a-release-app-playinfo-fallback
           path: |
             app/build/outputs/renamed_apk/release/MyTVB-v7a-v2.0.3-release.apk
             app/build/outputs/renamed_apk/release/MyTVB-v7a-v2.0.3-release.apk.sha256
