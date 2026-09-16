@@ -1,15 +1,16 @@
-name: Build MyTVB v2.0.3 v7a Release - Media HTTP 412 Fix
+name: Build MyTVB v2.0.3 v7a Release - Native HTTP 412 Fallback
 
 on:
   push:
     branches:
-      - build-v7a-media-http412-fix
+      - build-v7a-native-request-fallback
     paths:
       - app/src/main/java/com/mytvb/network/WbiGenerator.kt
       - app/src/main/java/com/mytvb/network/ua/DesktopUserAgentStore.kt
       - .github/patches/rapid-rebuffer-cdn-fallback.patch
       - .github/patches/http412-playinfo-retry.patch
       - .github/patches/media-http412-fix.patch
+      - .github/scripts/apply-native-request-fallback.py
       - .github/workflows/build-release-rapid-rebuffer.yml
   workflow_dispatch:
 
@@ -20,7 +21,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout v7a media 412 fix branch
+      - name: Checkout v7a native 412 fallback branch
         uses: actions/checkout@v5
 
       - name: Apply Kotlin playback patches
@@ -31,6 +32,7 @@ jobs:
           git apply .github/patches/http412-playinfo-retry.patch
           git apply --check .github/patches/media-http412-fix.patch
           git apply .github/patches/media-http412-fix.patch
+          python3 .github/scripts/apply-native-request-fallback.py
           git diff --check
 
           EXPECTED=$(printf '%s\n' \
@@ -44,12 +46,13 @@ jobs:
           printf '%s\n' "$ACTUAL"
           test "$ACTUAL" = "$EXPECTED"
 
-      - name: Verify API and media 412 fixes are present
+      - name: Verify native 412 fallbacks are present
         run: |
           grep -F 'val currentDmParams = if (includeDmParams) buildDmParams() else emptyMap()' app/src/main/java/com/mytvb/network/WbiGenerator.kt
           grep -F 'Chrome 153 is stable in Sep 2026' app/src/main/java/com/mytvb/network/ua/DesktopUserAgentStore.kt
-          grep -F 'refresh web identity and retry once' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
-          grep -F 'NetworkManager.getCurrentUserAgent()' app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt
+          grep -F 'switching to native minimal request profile' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
+          grep -F 'Dalvik/2.1.0 (Linux; U; Android 6.0; Android TV)' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
+          grep -F 'media_http412 retry=native' app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt
           grep -F 'MEDIA-CDN HTTP 412' app/src/main/java/com/mytvb/feature/player/PlaybackFallbackController.kt
           ! grep -F 'Chrome/119.0.0.0' app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt
 
@@ -95,7 +98,7 @@ jobs:
       - name: Upload Release APK
         uses: actions/upload-artifact@v6
         with:
-          name: MyTVB-v2.0.3-v7a-release-media-http412-fix
+          name: MyTVB-v2.0.3-v7a-release-native-http412-fallback
           path: |
             app/build/outputs/renamed_apk/release/MyTVB-v7a-v2.0.3-release.apk
             app/build/outputs/renamed_apk/release/MyTVB-v7a-v2.0.3-release.apk.sha256
