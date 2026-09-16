@@ -48,9 +48,11 @@ class DesktopUserAgentStore(
     }
 
     private fun generateDesktopUserAgent(): String {
-        val chromeMajor = Random.nextInt(120, 135)
-        val chromeBuild = Random.nextInt(0, 6500)
-        val chromePatch = Random.nextInt(0, 220)
+        // Keep the emulated desktop browser generation close to current Chrome stable/extended-stable.
+        // Chrome 153 is stable in Sep 2026; 152 remains a normal extended-stable generation.
+        val chromeMajor = Random.nextInt(152, 154)
+        val chromeBuild = Random.nextInt(7900, 8050)
+        val chromePatch = Random.nextInt(20, 220)
         return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/$chromeMajor.0.$chromeBuild.$chromePatch Safari/537.36"
     }
