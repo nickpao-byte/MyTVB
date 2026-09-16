@@ -9,7 +9,7 @@ diff --git a/app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGatew
  
  /** 可疑段预热的 UA 强制刷新最小间隔。 */
  private const val SUSPICIOUS_UA_REFRESH_MIN_INTERVAL_MS = 60_000L
-@@ -326,13 +327,35 @@ class VideoPlayerPlayInfoGateway(
+@@ -326,13 +327,32 @@ class VideoPlayerPlayInfoGateway(
              params["session"] = session
          }
  
@@ -47,7 +47,7 @@ diff --git a/app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGatew
  
          if (wbiResponse != null) {
              return PlayInfoResult(
-@@ -345,6 +368,20 @@ class VideoPlayerPlayInfoGateway(
+@@ -345,6 +365,20 @@ class VideoPlayerPlayInfoGateway(
          return null
      }
  
@@ -68,7 +68,7 @@ diff --git a/app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGatew
      private suspend fun requestNormalPlayInfo(
          aid: Long?,
          bvid: String?,
-@@ -426,10 +463,29 @@ class VideoPlayerPlayInfoGateway(
+@@ -426,11 +460,27 @@ class VideoPlayerPlayInfoGateway(
              params["session"] = session
          }
  
