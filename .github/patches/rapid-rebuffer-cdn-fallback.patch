@@ -1,0 +1,150 @@
+diff --git a/app/src/main/java/com/mytvb/feature/player/VideoPlayerCdnFailoverDataSource.kt b/app/src/main/java/com/mytvb/feature/player/VideoPlayerCdnFailoverDataSource.kt
+--- a/app/src/main/java/com/mytvb/feature/player/VideoPlayerCdnFailoverDataSource.kt
++++ b/app/src/main/java/com/mytvb/feature/player/VideoPlayerCdnFailoverDataSource.kt
+@@ -31,6 +31,35 @@ internal class VideoPlayerCdnFailoverState(
+         CdnLatencyProfile.recordTtfb(url, PENALTY_TTFB_MS)
+     }
+ 
++    /**
++     * 快速二次 BUFFERING：降权当前 host，并把本次会话的 native failover preferredIndex
++     * 移到下一个不同 host。真正的线路重开仍由 VideoPlayerCdnFailoverDataSource.open() 完成。
++     */
++    @Synchronized
++    fun penalizeCurrentHostAndPreferNext(): Boolean {
++        val currentIndex = preferredIndex()
++        val currentUri = candidates.getOrNull(currentIndex) ?: return false
++        CdnLatencyProfile.recordTtfb(currentUri.toString(), PENALTY_TTFB_MS)
++        if (candidates.size <= 1) {
++            return false
++        }
++
++        val currentHost = currentUri.host.orEmpty()
++        val nextIndex = (1 until candidates.size)
++            .map { offset -> (currentIndex + offset) % candidates.size }
++            .firstOrNull { index ->
++                candidates[index].host.orEmpty() != currentHost
++            }
++            ?: return false
++
++        preferredIndex = nextIndex
++        AppLog.w(
++            "PlaybackCdn",
++            "rapid_rebuffer cdn_deprioritized from=$currentHost to=${candidates[nextIndex].host.orEmpty()}"
++        )
++        return true
++    }
++
+     companion object {
+         // 远大于正常 TTFB(~200ms)，足以把卡顿过的 host 排到 candidates 末尾。
+         private const val PENALTY_TTFB_MS = 10_000L
+diff --git a/app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt b/app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt
+--- a/app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt
++++ b/app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt
+@@ -718,6 +718,22 @@ class VideoPlayerViewModel(
+     // 当前激活播放使用的 CDN failover state（video + audio 各一个，最多 2 个）。
+     // 卡顿时由 PlaybackFallbackController 通过 FallbackContext 读取并调 penalizeCurrentHost 降权。
+     private var currentCdnStates: List<VideoPlayerCdnFailoverState> = emptyList()
++
++    /**
++     * 快速二次 BUFFERING 只操作当前 MediaSource 已有的 native CDN failover state：
++     * 降权当前 host，并把下一次 open 的 preferredIndex 指到下一个不同 host。
++     * 不重建 PlayInfo、不切 codec，也不修改任何 HTTP / buffer 参数。
++     */
++    fun deprioritizeCurrentCdnForRapidRebuffer(): Boolean {
++        var advanced = false
++        currentCdnStates.forEach { state ->
++            if (state.penalizeCurrentHostAndPreferNext()) {
++                advanced = true
++            }
++        }
++        return advanced
++    }
++
+     private var preloadedPlayback: PreloadedPlayback? = null
+     private var preloadingIdentity: PlayRequestIdentity? = null
+     private var preloadJob: Job? = null
+diff --git a/app/src/main/java/com/mytvb/feature/player/VideoPlayerFragment.kt b/app/src/main/java/com/mytvb/feature/player/VideoPlayerFragment.kt
+--- a/app/src/main/java/com/mytvb/feature/player/VideoPlayerFragment.kt
++++ b/app/src/main/java/com/mytvb/feature/player/VideoPlayerFragment.kt
+@@ -70,2 +70,3 @@ import androidx.media3.common.C
+ 
+ private const val RISK_CONTROL_USER_HINT = "账号被风控了，请到设置中完成验证"
++private const val RAPID_REBUFFER_WINDOW_MS = 5_000L
+ private val riskControlUserHintShown = AtomicBoolean(false)
+@@ -169,5 +170,8 @@ class VideoPlayerFragment : Fragment() {
+     private var startupTraceSequence: Int = 0
+     private var suppressPlaybackEnvironmentSync: Boolean = false
+     private var lastKeepScreenOnState: Boolean? = null
++    private var hasActivePlaybackStarted: Boolean = false
++    private var bufferingAfterActivePlayback: Boolean = false
++    private var lastBufferRecoveryElapsedMs: Long = 0L
+ 
+     private val gaiaVgateLauncher = registerForActivityResult(
+@@ -350,6 +354,28 @@ class VideoPlayerFragment : Fragment() {
+             val isSeeking = playerView.seekSession?.isActive() == true
+             when (playbackState) {
+                 Player.STATE_BUFFERING -> {
++                    if (!isSeeking && hasActivePlaybackStarted && player?.playWhenReady == true) {
++                        val now = SystemClock.elapsedRealtime()
++                        val recoveredAt = lastBufferRecoveryElapsedMs
++                        if (
++                            recoveredAt > 0L &&
++                            now - recoveredAt in 0L..RAPID_REBUFFER_WINDOW_MS &&
++                            viewModel.deprioritizeCurrentCdnForRapidRebuffer()
++                        ) {
++                            lastBufferRecoveryElapsedMs = 0L
++                            val currentPlayer = player
++                            val positionMs = currentPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
++                            AppLog.w(
++                                TAG,
++                                "rapid rebuffer after recovery: ageMs=${now - recoveredAt}, " +
++                                    "position=$positionMs; prefer next native CDN candidate"
++                            )
++                            // 同位置 seek 仅强制当前 MediaSource 重新 open；native CDN DataSource 会从
++                            // 已前移的 preferredIndex 开始，不重建 PlayInfo、不切 codec。
++                            currentPlayer?.seekTo(positionMs)
++                        }
++                        bufferingAfterActivePlayback = true
++                    }
+                     viewModel.setLoading(true)
+                 }
+                 Player.STATE_READY -> {
+@@ -362,11 +388,17 @@ class VideoPlayerFragment : Fragment() {
+                     hideNextPreview()
+                 }
+                 Player.STATE_ENDED -> {
++                    hasActivePlaybackStarted = false
++                    bufferingAfterActivePlayback = false
++                    lastBufferRecoveryElapsedMs = 0L
+                     viewModel.setLoading(false)
+                     playerView.stopDanmaku()
+                     handlePlaybackEnded()
+                 }
+                 Player.STATE_IDLE -> {
++                    hasActivePlaybackStarted = false
++                    bufferingAfterActivePlayback = false
++                    lastBufferRecoveryElapsedMs = 0L
+                     viewModel.setLoading(false)
+                 }
+             }
+@@ -375,6 +407,8 @@ class VideoPlayerFragment : Fragment() {
+ 
+         override fun onPlayerError(error: PlaybackException) {
+             startupTrace = null
++            lastBufferRecoveryElapsedMs = 0L
++            bufferingAfterActivePlayback = false
+             viewModel.setLoading(false)
+             viewModel.handlePlaybackError(error, player?.currentPosition ?: 0L)
+             AppLog.e(TAG, "player error: ${error.message}", error)
+@@ -385,6 +419,11 @@ class VideoPlayerFragment : Fragment() {
+         override fun onIsPlayingChanged(isPlaying: Boolean) {
+             val isSeeking = playerView.seekSession?.isActive() == true
+             if (isPlaying && !isSeeking) {
++                if (bufferingAfterActivePlayback) {
++                    lastBufferRecoveryElapsedMs = SystemClock.elapsedRealtime()
++                    bufferingAfterActivePlayback = false
++                }
++                hasActivePlaybackStarted = true
+                 playerView.resumeDanmaku()
+                 progressCoordinator.restart()
+                 // 青少年模式：累计观看时长埋点（仅时间限制启用时计时）
