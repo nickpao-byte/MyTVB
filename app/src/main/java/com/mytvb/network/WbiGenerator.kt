@@ -9,12 +9,21 @@ object WbiGenerator {
     private var cachedOriginKey: String? = null
     private var cachedMixinKey: String? = null
     private var cachedBRet: String? = null
+    private val secureRandom = SecureRandom()
+    private val screenDimensions: Pair<Int, Int> by lazy { chooseScreenDimensions() }
 
     fun ensureBRet(): String {
         cachedBRet?.let { return it }
         val rand = ByteArray(44)
-        SecureRandom().nextBytes(rand)
-        rand[36] = 0; rand[37] = 73; rand[38] = 69; rand[39] = 78; rand[40] = 68; rand[41] = 0xAE.toByte(); rand[42] = 0x42; rand[43] = 0x60
+        secureRandom.nextBytes(rand)
+        rand[36] = 0
+        rand[37] = 73
+        rand[38] = 69
+        rand[39] = 78
+        rand[40] = 68
+        rand[41] = 0xAE.toByte()
+        rand[42] = 0x42
+        rand[43] = 0x60
         val b64 = Base64.encodeToString(rand, Base64.NO_WRAP)
         val result = b64.takeLast(80)
         cachedBRet = result
@@ -49,12 +58,14 @@ object WbiGenerator {
         }
         val mixinKey = getMixinKey(originKey)
         val wts = System.currentTimeMillis() / 1000
+        // Bilibili's current web playurl anti-bot check expects dm_* to look like a
+        // per-request browser fingerprint. Generate them once per WBI signature and
+        // reuse the exact same values for both w_rid calculation and the returned query.
+        val generatedDmParams = if (includeDmParams) generateDmParams() else emptyMap()
 
         val withWts = params.toMutableMap()
         withWts["wts"] = wts.toString()
-        if (includeDmParams) {
-            withWts.putAll(dmParams)
-        }
+        withWts.putAll(generatedDmParams)
 
         val sorted = withWts.entries.sortedBy { it.key }
             .associate { it.key to filterValue(it.value) }
@@ -65,9 +76,7 @@ object WbiGenerator {
         val result = params.toMutableMap()
         result["wts"] = wts.toString()
         result["w_rid"] = wRid
-        if (includeDmParams) {
-            result.putAll(dmParams)
-        }
+        result.putAll(generatedDmParams)
         return result
     }
 
@@ -120,15 +129,80 @@ object WbiGenerator {
         return digest.joinToString("") { "%02x".format(it) }
     }
 
-    // dm_* anti-bot params from browser capture
-    private val dmParams: Map<String, String> by lazy {
-        mapOf(
+    /**
+     * Generate Bilibili web anti-bot dm_* parameters using the same structure as
+     * current browser-oriented clients: random encoded fingerprints per request,
+     * a process-stable common desktop resolution, and compact dm_img_inter JSON.
+     */
+    private fun generateDmParams(): Map<String, String> {
+        val dmImgStr = base64Fingerprint(randomPrintable(length = secureRandom.nextInt(49) + 16))
+        val dmCoverImgStr = base64Fingerprint(randomPrintable(length = secureRandom.nextInt(97) + 32))
+
+        val width = screenDimensions.first
+        val height = screenDimensions.second
+        val whRnd = secureRandom.nextInt(114)
+        val wh0 = 2 * width + 2 * height + 3 * whRnd
+        val wh1 = 4 * width - height + whRnd
+
+        val scrollTop = secureRandom.nextInt(101)
+        val ofRnd = secureRandom.nextInt(514)
+        val of0 = 3 * scrollTop + ofRnd
+        val of1 = 4 * scrollTop + 2 * ofRnd
+
+        val dmImgInter = "{\"ds\":[],\"wh\":[$wh0,$wh1,$whRnd],\"of\":[$of0,$of1,$ofRnd]}"
+
+        return mapOf(
             "dm_img_list" to "[]",
-            "dm_img_str" to "V2ViR0wgMS4wIChPcGVuR0wgRVMgMi4wIENocm9taXVtKQ",
-            "dm_cover_img_str" to "QU5HTEUgKEludGVsLCBJbnRlbChSKSBJcmlzKFIpIFhlIEdyYXBoaWNzICgweDAwMDA0NkE2KSBEaXJlY3QzRDExIHZzXzVfMCBwc181XzAsIEQzRDExKUdvb2dsZSBJbmMuIChJbnRlbC",
-            "dm_img_inter" to "{\"ds\":[],\"wh\":[5032,6004,10],\"of\":[425,850,425]}"
+            "dm_img_str" to dmImgStr,
+            "dm_cover_img_str" to dmCoverImgStr,
+            "dm_img_inter" to dmImgInter
         )
     }
+
+    private fun randomPrintable(length: Int): String {
+        val chars = PRINTABLE_ASCII
+        return buildString(length) {
+            repeat(length) {
+                append(chars[secureRandom.nextInt(chars.length)])
+            }
+        }
+    }
+
+    private fun base64Fingerprint(value: String): String {
+        val encoded = Base64.encodeToString(value.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+        return if (encoded.length > 2) encoded.dropLast(2) else encoded
+    }
+
+    private fun chooseScreenDimensions(): Pair<Int, Int> {
+        val candidates = arrayOf(
+            ScreenCandidate(1920, 1080, 18),
+            ScreenCandidate(1366, 768, 18),
+            ScreenCandidate(1536, 864, 17),
+            ScreenCandidate(1280, 720, 8),
+            ScreenCandidate(2560, 1440, 7),
+            ScreenCandidate(1440, 900, 5),
+            ScreenCandidate(1600, 900, 5)
+        )
+        val totalWeight = candidates.sumOf { it.weight }
+        var pick = secureRandom.nextInt(totalWeight)
+        for (candidate in candidates) {
+            if (pick < candidate.weight) {
+                return candidate.width to candidate.height
+            }
+            pick -= candidate.weight
+        }
+        return 1920 to 1080
+    }
+
+    private data class ScreenCandidate(
+        val width: Int,
+        val height: Int,
+        val weight: Int
+    )
+
+    private const val PRINTABLE_ASCII =
+        "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" +
+            "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ \t\n\r"
 
     fun extractKeyFromUrl(url: String): String {
         val wbiIndex = url.indexOf("wbi/")
