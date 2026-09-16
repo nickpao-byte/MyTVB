@@ -1,26 +1,32 @@
 diff --git a/app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt b/app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt
 --- a/app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt
 +++ b/app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt
-@@ -322,4 +322,18 @@
+@@ -322,4 +322,24 @@
      private val playerOkHttpClient = OkHttpClient.Builder()
 +        .addInterceptor { chain ->
 +            val userAgent = com.mytvb.network.NetworkManager.getCurrentUserAgent()
++            val mediaReferer = when {
++                (currentEpId ?: 0L) > 0L -> "https://www.bilibili.com/bangumi/play/ep$currentEpId"
++                !currentBvid.isNullOrBlank() -> "https://www.bilibili.com/video/$currentBvid"
++                else -> "https://www.bilibili.com/"
++            }
 +            val request = chain.request().newBuilder()
-+                // Media CDN requests previously stayed on a hard-coded Chrome/119 identity even
-+                // when the API/WBI identity had been refreshed. Keep the media request identity
-+                // aligned with the current web session on every open/retry.
++                // Media CDN requests previously stayed on a hard-coded Chrome/119 identity.
++                // Match the active web identity and the actual video page on every open/retry.
 +                .header("User-Agent", userAgent)
 +                .header("Accept", "*/*")
 +                .header("Accept-Language", com.mytvb.network.NetworkManager.getAcceptLanguage())
-+                .header("Origin", "https://www.bilibili.com")
-+                .header("Referer", "https://www.bilibili.com/")
++                .header("Referer", mediaReferer)
++                // Do not synthesize Origin for native CDN byte-range requests. Current browser/
++                // downloader paths rely on Referer for CDN anti-hotlink checks.
++                .removeHeader("Origin")
 +                .build()
 +            chain.proceed(request)
 +        }
          .connectTimeout(5, TimeUnit.SECONDS)
          .readTimeout(15, TimeUnit.SECONDS)
          .connectionPool(okhttp3.ConnectionPool(5, 30, TimeUnit.SECONDS))
-@@ -336,13 +350,11 @@
+@@ -336,13 +356,10 @@
          })
          .build()
      private val upstreamDataSourceFactory = OkHttpDataSource.Factory(playerOkHttpClient)
@@ -31,9 +37,9 @@ diff --git a/app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt 
 +        .setUserAgent(com.mytvb.network.NetworkManager.getCurrentUserAgent())
          .setDefaultRequestProperties(
              mapOf(
-+                "Accept" to "*/*",
-                 "Origin" to "https://www.bilibili.com",
+-                "Origin" to "https://www.bilibili.com",
 -                "Referer" to "https://www.bilibili.com"
++                "Accept" to "*/*",
 +                "Referer" to "https://www.bilibili.com/"
              )
          )
