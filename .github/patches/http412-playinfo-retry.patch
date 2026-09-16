@@ -1,0 +1,102 @@
+diff --git a/app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt b/app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
+--- a/app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
++++ b/app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
+@@ -26,6 +26,7 @@ import java.util.concurrent.CancellationException
+ import android.os.SystemClock
+ import okhttp3.OkHttpClient
+ import okhttp3.Request
++import retrofit2.HttpException
+ 
+ /** 可疑段预热的 UA 强制刷新最小间隔。 */
+ private const val SUSPICIOUS_UA_REFRESH_MIN_INTERVAL_MS = 60_000L
+@@ -326,13 +327,35 @@ class VideoPlayerPlayInfoGateway(
+             params["session"] = session
+         }
+ 
+-        val wbiResponse = runCatching {
++        val wbiResponse = try {
+             apiService.getVideoPlayInfoWbi(buildWbiParams(params))
+-        }.onFailure { throwable ->
+-            if (throwable !is CancellationException) {
+-                AppLog.e(logTag, "requestPlayInfo wbi exception: ${throwable.message}", throwable)
++        } catch (throwable: Throwable) {
++            if (throwable is HttpException && throwable.code() == 412) {
++                recoverPlayInfoHttp412("wbi", cid)
++                val retryParams = params.toMutableMap()
++                genPlayUrlSession()?.let { retryParams["session"] = it }
++                runCatching {
++                    // buildWbiParams() regenerates dm_* and signs them again for the retry.
++                    apiService.getVideoPlayInfoWbi(buildWbiParams(retryParams))
++                }.onFailure { retryError ->
++                    if (retryError !is CancellationException) {
++                        AppLog.e(
++                            logTag,
++                            "requestPlayInfo wbi retry after 412 failed: ${retryError.message}",
++                            retryError
++                        )
++                    }
++                }.getOrNull()
++            } else {
++                if (throwable !is CancellationException) {
++                    AppLog.e(logTag, "requestPlayInfo wbi exception: ${throwable.message}", throwable)
++                }
++                null
+             }
+-        }.getOrNull()
++        }
+ 
+         if (wbiResponse != null) {
+             return PlayInfoResult(
+@@ -345,6 +368,20 @@ class VideoPlayerPlayInfoGateway(
+         return null
+     }
+ 
++    private suspend fun recoverPlayInfoHttp412(source: String, cid: Long) {
++        AppLog.w(
++            logTag,
++            "playback_diag http412 source=$source cid=$cid; refresh web identity and retry once"
++        )
++        runCatching {
++            // 412 is a web/WBI risk-control failure, not a CDN failure. Refresh the emulated
++            // browser identity + main page/nav context; prewarm also updates WBI keys from nav.
++            securityGateway.prewarmWebSession(forceUaRefresh = true)
++        }.onFailure { error ->
++            AppLog.w(logTag, "playback_diag http412 recovery prewarm failed: ${error.message}")
++        }
++    }
++
+     private suspend fun requestNormalPlayInfo(
+         aid: Long?,
+         bvid: String?,
+@@ -426,10 +463,29 @@ class VideoPlayerPlayInfoGateway(
+             params["session"] = session
+         }
+ 
+-        val wbiResponse = runCatching {
++        val wbiResponse = try {
+             noCookieApiService.getVideoPlayInfoWbiTryLook(buildWbiParams(params))
+-        }.onFailure { throwable ->
+-            AppLog.e(logTag, "requestPlayInfo wbi try_look exception: ${throwable.message}", throwable)
+-        }.getOrNull()
++        } catch (throwable: Throwable) {
++            if (throwable is HttpException && throwable.code() == 412) {
++                recoverPlayInfoHttp412("wbi_try_look", cid)
++                val retryParams = params.toMutableMap()
++                genPlayUrlSession()?.let { retryParams["session"] = it }
++                runCatching {
++                    noCookieApiService.getVideoPlayInfoWbiTryLook(buildWbiParams(retryParams))
++                }.onFailure { retryError ->
++                    AppLog.e(
++                        logTag,
++                        "requestPlayInfo wbi try_look retry after 412 failed: ${retryError.message}",
++                        retryError
++                    )
++                }.getOrNull()
++            } else {
++                AppLog.e(logTag, "requestPlayInfo wbi try_look exception: ${throwable.message}", throwable)
++                null
++            }
++        }
+ 
+         if (wbiResponse != null) {
+             return PlayInfoResult(
