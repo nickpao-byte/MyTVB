@@ -1,11 +1,14 @@
-name: Build MyTVB v2.0.3 v7a Release - Rapid Rebuffer CDN Fallback
+name: Build MyTVB v2.0.3 v7a Release - Buffer and HTTP 412 Fix
 
 on:
   push:
     branches:
-      - build-v7a-rapid-rebuffer-cdn-fallback
+      - build-v7a-buffer-412-fix
     paths:
+      - app/src/main/java/com/mytvb/network/WbiGenerator.kt
+      - app/src/main/java/com/mytvb/network/ua/DesktopUserAgentStore.kt
       - .github/patches/rapid-rebuffer-cdn-fallback.patch
+      - .github/patches/http412-playinfo-retry.patch
       - .github/workflows/build-release-rapid-rebuffer.yml
   workflow_dispatch:
 
@@ -16,23 +19,32 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout playable v7a base branch
+      - name: Checkout v7a buffer and 412 fix branch
         uses: actions/checkout@v5
 
-      - name: Apply Kotlin-only rapid rebuffer patch
+      - name: Apply Kotlin playback patches
         run: |
           git apply --check .github/patches/rapid-rebuffer-cdn-fallback.patch
           git apply .github/patches/rapid-rebuffer-cdn-fallback.patch
+          git apply --check .github/patches/http412-playinfo-retry.patch
+          git apply .github/patches/http412-playinfo-retry.patch
           git diff --check
 
           EXPECTED=$(printf '%s\n' \
             'app/src/main/java/com/mytvb/feature/player/VideoPlayerCdnFailoverDataSource.kt' \
             'app/src/main/java/com/mytvb/feature/player/VideoPlayerFragment.kt' \
+            'app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt' \
             'app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt' | sort)
           ACTUAL=$(git diff --name-only | sort)
-          echo "Changed Kotlin files:"
+          echo "Runtime-patched Kotlin files:"
           printf '%s\n' "$ACTUAL"
           test "$ACTUAL" = "$EXPECTED"
+
+      - name: Verify 412 fingerprint fixes are present
+        run: |
+          grep -F 'val currentDmParams = if (includeDmParams) buildDmParams() else emptyMap()' app/src/main/java/com/mytvb/network/WbiGenerator.kt
+          grep -F 'Chrome 153 is stable in Sep 2026' app/src/main/java/com/mytvb/network/ua/DesktopUserAgentStore.kt
+          grep -F 'refresh web identity and retry once' app/src/main/java/com/mytvb/feature/player/VideoPlayerPlayInfoGateway.kt
 
       - name: Verify Android 6 and armeabi-v7a release config unchanged
         run: |
@@ -76,7 +88,7 @@ jobs:
       - name: Upload Release APK
         uses: actions/upload-artifact@v6
         with:
-          name: MyTVB-v2.0.3-v7a-release-rapid-rebuffer-cdn-fallback
+          name: MyTVB-v2.0.3-v7a-release-buffer-http412-fix
           path: |
             app/build/outputs/renamed_apk/release/MyTVB-v7a-v2.0.3-release.apk
             app/build/outputs/renamed_apk/release/MyTVB-v7a-v2.0.3-release.apk.sha256
