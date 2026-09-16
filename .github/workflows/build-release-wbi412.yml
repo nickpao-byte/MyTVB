@@ -1,0 +1,91 @@
+name: Build MyTVB v2.0.3 v7a Release - Rebuffer + WBI 412 Fix
+
+on:
+  push:
+    branches:
+      - build-v7a-rapid-rebuffer-wbi412-fix
+    paths:
+      - app/src/main/java/com/mytvb/network/WbiGenerator.kt
+      - .github/patches/rapid-rebuffer-cdn-fallback.patch
+      - .github/workflows/build-release-wbi412.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout v7a 412-fix branch
+        uses: actions/checkout@v5
+
+      - name: Verify dynamic WBI anti-412 fingerprint source
+        run: |
+          grep -F 'generateDmParams()' app/src/main/java/com/mytvb/network/WbiGenerator.kt
+          grep -F 'val generatedDmParams = if (includeDmParams) generateDmParams() else emptyMap()' app/src/main/java/com/mytvb/network/WbiGenerator.kt
+          grep -F 'dm_img_inter' app/src/main/java/com/mytvb/network/WbiGenerator.kt
+          ! grep -F 'V2ViR0wgMS4wIChPcGVuR0wgRVMgMi4wIENocm9taXVtKQ' app/src/main/java/com/mytvb/network/WbiGenerator.kt
+
+      - name: Apply Kotlin-only rapid rebuffer CDN fallback patch
+        run: |
+          git apply --check .github/patches/rapid-rebuffer-cdn-fallback.patch
+          git apply .github/patches/rapid-rebuffer-cdn-fallback.patch
+          git diff --check
+
+          EXPECTED=$(printf '%s\n' \
+            'app/src/main/java/com/mytvb/feature/player/VideoPlayerCdnFailoverDataSource.kt' \
+            'app/src/main/java/com/mytvb/feature/player/VideoPlayerFragment.kt' \
+            'app/src/main/java/com/mytvb/feature/player/VideoPlayerViewModel.kt' | sort)
+          ACTUAL=$(git diff --name-only | sort)
+          echo "Runtime-patched Kotlin files:"
+          printf '%s\n' "$ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
+
+      - name: Verify Android 6 and armeabi-v7a release config unchanged
+        run: |
+          grep -F 'minSdk = 23' app/build.gradle.kts
+          awk '/release \{/{flag=1} flag{print} /    \}/{if(flag){exit}}' app/build.gradle.kts | grep -F 'abiFilters += listOf("armeabi-v7a")'
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Use preinstalled Android SDK
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Build 32-bit Release APK from Kotlin source
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleReleaseRenamed
+
+      - name: Verify Release APK and checksum
+        run: |
+          APK='app/build/outputs/renamed_apk/release/MyTVB-v7a-v2.0.3-release.apk'
+          test -f "$APK"
+          ls -lh "$APK"
+
+          echo 'Native ABI directories:'
+          ABIS=$(unzip -l "$APK" | awk '/lib\/.+\.so$/ {split($4,a,"/"); print a[2]}' | sort -u)
+          printf '%s\n' "$ABIS"
+          test "$ABIS" = 'armeabi-v7a'
+
+          sha256sum "$APK" | tee "$APK.sha256"
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: MyTVB-v2.0.3-v7a-release-rebuffer-wbi412-fix
+          path: |
+            app/build/outputs/renamed_apk/release/MyTVB-v7a-v2.0.3-release.apk
+            app/build/outputs/renamed_apk/release/MyTVB-v7a-v2.0.3-release.apk.sha256
+          if-no-files-found: error
