@@ -9,11 +9,12 @@ object WbiGenerator {
     private var cachedOriginKey: String? = null
     private var cachedMixinKey: String? = null
     private var cachedBRet: String? = null
+    private val secureRandom = SecureRandom()
 
     fun ensureBRet(): String {
         cachedBRet?.let { return it }
         val rand = ByteArray(44)
-        SecureRandom().nextBytes(rand)
+        secureRandom.nextBytes(rand)
         rand[36] = 0; rand[37] = 73; rand[38] = 69; rand[39] = 78; rand[40] = 68; rand[41] = 0xAE.toByte(); rand[42] = 0x42; rand[43] = 0x60
         val b64 = Base64.encodeToString(rand, Base64.NO_WRAP)
         val result = b64.takeLast(80)
@@ -49,11 +50,14 @@ object WbiGenerator {
         }
         val mixinKey = getMixinKey(originKey)
         val wts = System.currentTimeMillis() / 1000
+        // Bilibili playurl anti-bot fingerprint must be fresh for each signed request.
+        // Generate once here and use the exact same values both for w_rid calculation and output.
+        val currentDmParams = if (includeDmParams) buildDmParams() else emptyMap()
 
         val withWts = params.toMutableMap()
         withWts["wts"] = wts.toString()
         if (includeDmParams) {
-            withWts.putAll(dmParams)
+            withWts.putAll(currentDmParams)
         }
 
         val sorted = withWts.entries.sortedBy { it.key }
@@ -66,7 +70,7 @@ object WbiGenerator {
         result["wts"] = wts.toString()
         result["w_rid"] = wRid
         if (includeDmParams) {
-            result.putAll(dmParams)
+            result.putAll(currentDmParams)
         }
         return result
     }
@@ -120,14 +124,60 @@ object WbiGenerator {
         return digest.joinToString("") { "%02x".format(it) }
     }
 
-    // dm_* anti-bot params from browser capture
-    private val dmParams: Map<String, String> by lazy {
-        mapOf(
+    /**
+     * Browser-style dm_* fingerprint, aligned with current yt-dlp/Bilibili playurl handling.
+     * Values are regenerated per WBI request instead of reusing one static fingerprint forever.
+     */
+    private fun buildDmParams(): Map<String, String> {
+        val (width, height) = randomScreenDimensions()
+        val whRnd = secureRandom.nextInt(114)
+        val wh0 = 2 * width + 2 * height + 3 * whRnd
+        val wh1 = 4 * width - height + whRnd
+
+        val scrollTop = secureRandom.nextInt(101)
+        val ofRnd = secureRandom.nextInt(514)
+        val of0 = 3 * scrollTop + ofRnd
+        val of1 = 4 * scrollTop + 2 * ofRnd
+
+        // Keep compact JSON: Bilibili's current playurl validation is sensitive to this form.
+        val dmImgInter = "{\"ds\":[],\"wh\":[$wh0,$wh1,$whRnd],\"of\":[$of0,$of1,$ofRnd]}"
+
+        return mapOf(
             "dm_img_list" to "[]",
-            "dm_img_str" to "V2ViR0wgMS4wIChPcGVuR0wgRVMgMi4wIENocm9taXVtKQ",
-            "dm_cover_img_str" to "QU5HTEUgKEludGVsLCBJbnRlbChSKSBJcmlzKFIpIFhlIEdyYXBoaWNzICgweDAwMDA0NkE2KSBEaXJlY3QzRDExIHZzXzVfMCBwc181XzAsIEQzRDExKUdvb2dsZSBJbmMuIChJbnRlbC",
-            "dm_img_inter" to "{\"ds\":[],\"wh\":[5032,6004,10],\"of\":[425,850,425]}"
+            "dm_img_str" to randomPrintableBase64(secureRandom.nextInt(49) + 16),
+            "dm_cover_img_str" to randomPrintableBase64(secureRandom.nextInt(97) + 32),
+            "dm_img_inter" to dmImgInter
         )
+    }
+
+    private fun randomPrintableBase64(length: Int): String {
+        val chars = CharArray(length) {
+            // Printable ASCII range, mirroring a browser fingerprint's opaque printable payload.
+            (secureRandom.nextInt(95) + 32).toChar()
+        }
+        return Base64.encodeToString(
+            String(chars).toByteArray(Charsets.UTF_8),
+            Base64.NO_WRAP
+        ).trimEnd('=')
+    }
+
+    private fun randomScreenDimensions(): Pair<Int, Int> {
+        // Weights follow the current yt-dlp Bilibili extractor distribution.
+        var pick = secureRandom.nextInt(78)
+        val weighted = arrayOf(
+            Triple(1920, 1080, 18),
+            Triple(1366, 768, 18),
+            Triple(1536, 864, 17),
+            Triple(1280, 720, 8),
+            Triple(2560, 1440, 7),
+            Triple(1440, 900, 5),
+            Triple(1600, 900, 5)
+        )
+        for ((width, height, weight) in weighted) {
+            if (pick < weight) return width to height
+            pick -= weight
+        }
+        return 1920 to 1080
     }
 
     fun extractKeyFromUrl(url: String): String {
